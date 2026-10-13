@@ -50,7 +50,7 @@
       └─ windows\
          ├─ dotnet\           C# / WPF 工程：ScrcpyPicker.sln + src\（Views/ViewModels/Services）
          │                    + tests\（xUnit 服务层单测）+ tools\（冒烟与静态闸门脚本）
-         ├─ Dist\             ScrcpyPicker.exe + tools\ + ScrcpyPicker-win-x64.zip（发布产物）
+         ├─ Dist\             本地构建产物（ScrcpyPicker.exe + tools\），不入库；发布走 GitHub Releases
          ├─ Setup.iss         安装包脚本
          ├─ build.ps1         构建脚本（只能在 Windows 上跑：WPF 不能交叉编译；顺带产出便携 zip）
          └─ README.md
@@ -168,6 +168,7 @@ macOS app 当前**默认只自动发现 USB 设备**：mDNS 无线调试与子�
   用户机零 PowerShell / 浏览器 / .NET 依赖。exe 74 MB 上下，比 Go 版大 8 倍，换的是「拷一个文件就能跑」。
   发布物有两种形态：**便携 zip**（`ScrcpyPicker-win-x64.zip`，exe + `tools\` + 换机说明，解压即用）和
   **安装程序**（`Setup.iss` → `ScrcpyPicker-Setup-x64.exe`，带开始菜单/桌面快捷方式与卸载）。
+  成品不上 git——双平台 zip 统一上传 [GitHub Releases](https://github.com/souvenirding/scrcpy-device-picker/releases)。
 
 ### macOS `.app` Bundle
 

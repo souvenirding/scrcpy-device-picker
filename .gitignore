@@ -40,22 +40,5 @@ packaging/windows/Dist/smoke/
 .vs/
 *.user
 
-# 例外：发布物需纳入版本控制（覆盖上面的 dist/、Dist/、*.exe 忽略）
-# 注意：gitignore 对“已跟踪文件”无效；此处仅为让忽略规则与已入库的发布物一致，
-# 避免误删重建后被忽略。下一次重新编译生成新产物后，`git add -A` 会自动带上它们。
-!packaging/windows/Dist/
-!packaging/windows/Dist/ScrcpyPicker.exe
-# 自包含分发：exe 旁边的 tools\（adb.exe / scrcpy.exe + dll + scrcpy-server）一起入库，
-# 换机器 clone 下来就能直接双击跑，不用再手工抓 platform-tools。
-# 不想要这 25MB 的话，把下面两行的 ! 改成路径前缀即可变回本地专用。
-!packaging/windows/Dist/tools/
-!packaging/windows/Dist/tools/**
-!packaging/dist/
-!packaging/dist/ScrcpyPicker-1.0.0-arm64.zip
-# 仍忽略 dist 里未打包的 .app 目录等临时物
-packaging/dist/ScrcpyPicker.app/
-
-# Windows 便携 zip 不入库：里面的 exe 和 tools\ 已经逐个文件跟踪了，
-# 再存一份 95 MB 的压缩包只是把同样的字节放两遍。要换机器直接在
-# 本机跑 build.ps1 现出包，或把 Dist\ 整个文件夹拷走，效果一样。
-packaging/windows/Dist/ScrcpyPicker-win-x64.zip
+# 成品一律走 GitHub Releases（双平台 zip），仓库不保留任何二进制产物；
+# 本地 dist/ 与 Dist/ 产物由上方规则忽略，打包工作流照常产出。

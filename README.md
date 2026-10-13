@@ -11,6 +11,17 @@
 - **macOS**：原生 Swift 程序（SwiftUI 原生界面 + 进程内服务 + adb/scrcpy 调度），打包成一个
   `ScrcpyPicker.app`，**29 MB**，双击即用、零依赖。
 
+## 下载
+
+到 [Releases](https://github.com/souvenirding/scrcpy-device-picker/releases/latest) 下载对应平台的 zip：
+
+| 平台 | 文件 | 系统要求 |
+|---|---|---|
+| macOS (Apple Silicon) | `ScrcpyPicker-<ver>-arm64.zip` | macOS 13.0+ |
+| Windows (x64) | `ScrcpyPicker-<ver>-win64.zip` | Windows 10/11 x64 |
+
+zip 自带 adb 与 scrcpy，解压即用，无需安装任何运行时。
+
 ![设备表（示例数据）](docs/images/device-table.png)
 
 > 上图为 **macOS 版**的界面（**虚构示例设备**，取自 `shared/devices.example.json`），仅演示布局，不含任何真实设备信息。
