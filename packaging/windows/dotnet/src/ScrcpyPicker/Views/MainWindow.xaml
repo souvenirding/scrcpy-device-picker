@@ -1,0 +1,198 @@
+<ui:FluentWindow x:Class="ScrcpyPicker.Views.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:views="clr-namespace:ScrcpyPicker.Views"
+                 Title="投屏设备选择器"
+                 Width="1020" Height="640"
+                 MinWidth="760" MinHeight="420"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowStartupLocation="CenterScreen"
+                 Background="Transparent">
+
+    <ui:FluentWindow.Resources>
+        <views:BoolToVisibilityConverter x:Key="BoolVis" />
+        <views:NonEmptyToVisibilityConverter x:Key="NonEmptyVis" />
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="投屏设备选择器" Icon="pack://application:,,,/Assets/picker.ico" />
+
+        <Grid Grid.Row="1" Margin="16,4,16,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 工具条 -->
+            <!-- AutomationId 是给 smoke-ui.ps1 用的：脚本从这份 XAML 里读这些 ASCII 名字，
+                 再要求它们出现在 UI 树中，这样断言不用写任何中文常量。
+                 tool*/banner*/toast* 开头的默认必须"不出现"（健康状态下折叠），
+                 其余必须出现。 -->
+            <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,10">
+                <ui:Button DockPanel.Dock="Left" Content="刷新"
+                           AutomationProperties.AutomationId="btnRefresh"
+                           Appearance="Secondary" Margin="0,0,8,0"
+                           Command="{Binding RefreshCommand}" />
+                <ui:Button DockPanel.Dock="Left" Content="深度刷新"
+                           AutomationProperties.AutomationId="btnDeepRefresh"
+                           Appearance="Secondary" Margin="0,0,8,0"
+                           Command="{Binding DeepRefreshCommand}"
+                           ToolTip="重新跑一次设备详情（跳过 60 秒缓存）" />
+                <ui:ToggleSwitch DockPanel.Dock="Left" Content="USB 优先"
+                                 AutomationProperties.AutomationId="swtUsbFirst"
+                                 Margin="0,0,12,0"
+                                 IsChecked="{Binding PreferUsb, Mode=TwoWay}"
+                                 Command="{Binding TogglePreferUsbCommand}" />
+                <ui:ToggleSwitch DockPanel.Dock="Left" Content="导航条"
+                                 AutomationProperties.AutomationId="swtNavBar"
+                                 Margin="0,0,12,0"
+                                 IsChecked="{Binding NavBarOn, Mode=TwoWay}"
+                                 Command="{Binding ToggleNavBarCommand}"
+                                 ToolTip="投屏时在镜像窗口下沿挂一条吸附式按键条（返回 / 桌面 / 多任务 / 音量 / 息屏 / 唤醒）。拖动它可脱离，双击重新吸附。" />
+                <Border DockPanel.Dock="Left" Padding="10,3" CornerRadius="12"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding WirelessText}" FontSize="12" />
+                </Border>
+                <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center"
+                           FontSize="12" Opacity="0.75"
+                           AutomationProperties.AutomationId="lblStatusLine"
+                           Text="{Binding StatusLine}" />
+            </DockPanel>
+
+            <!-- 错误 / 指引横幅 -->
+            <ui:InfoBar Grid.Row="1" x:Name="bannerInfo" AutomationProperties.AutomationId="bannerInfo"
+                        IsOpen="{Binding BannerVisible, Mode=TwoWay}"
+                        Severity="Warning" Title="需要处理"
+                        Message="{Binding BannerText}"
+                        Margin="0,0,0,10" />
+
+            <!-- adb / scrcpy 目录面板 -->
+            <ui:Card Grid.Row="2" x:Name="toolPanel" AutomationProperties.AutomationId="toolPanel" Margin="0,0,0,10"
+                     Visibility="{Binding ToolPanelVisible, Converter={StaticResource BoolVis}}">
+                <StackPanel Margin="12">
+                    <DockPanel LastChildFill="True">
+                        <ui:Button DockPanel.Dock="Right" Content="清除记住的目录"
+                                   x:Name="btnToolClear" AutomationProperties.AutomationId="btnToolClear"
+                                   Appearance="Secondary" Margin="8,0,0,0"
+                                   Command="{Binding ClearToolDirCommand}" />
+                        <ui:Button DockPanel.Dock="Right" Content="{Binding ScanButtonText}"
+                                   x:Name="btnToolScan" AutomationProperties.AutomationId="btnToolScan"
+                                   Appearance="Secondary" Margin="8,0,0,0"
+                                   IsEnabled="{Binding ToolBusy, Converter={StaticResource BoolVis}, ConverterParameter=invert}"
+                                   Command="{Binding ScanToolchainCommand}" />
+                        <ui:Button DockPanel.Dock="Right" Content="保存并应用"
+                                   x:Name="btnToolApply" AutomationProperties.AutomationId="btnToolApply"
+                                   Appearance="Primary" Margin="8,0,0,0"
+                                   IsEnabled="{Binding ToolBusy, Converter={StaticResource BoolVis}, ConverterParameter=invert}"
+                                   Command="{Binding ApplyToolDirCommand}" />
+                        <ui:TextBox x:Name="toolDirInput" AutomationProperties.AutomationId="toolDirInput"
+                                    Text="{Binding ToolDirInput, UpdateSourceTrigger=PropertyChanged}"
+                                    KeyDown="ToolDirBox_KeyDown"
+                                    PlaceholderText="含 adb.exe / scrcpy.exe 的目录，例如 E:\Flash\tools\scrcpy" />
+                    </DockPanel>
+
+                    <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="12"
+                               Opacity="0.85" Text="{Binding ToolNote}" />
+
+                    <ItemsControl Margin="0,10,0,0" ItemsSource="{Binding ToolCandidates}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ui:Button Content="{Binding}" Appearance="Transparent"
+                                           Margin="0,0,8,4" FontSize="12"
+                                           Command="{Binding DataContext.ApplyToolDirCommand,
+                                                     RelativeSource={RelativeSource AncestorType=Window}}"
+                                           CommandParameter="{Binding}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ui:Card>
+
+            <!-- 设备表 -->
+            <Border Grid.Row="3"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8">
+                <DataGrid x:Name="dgDevices" AutomationProperties.AutomationId="dgDevices"
+                          ItemsSource="{Binding Devices}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          SelectionMode="Single"
+                          SelectionUnit="FullRow"
+                          CanUserReorderColumns="False"
+                          Background="Transparent"
+                          BorderThickness="0"
+                          RowHeight="32"
+                          MouseDoubleClick="Grid_MouseDoubleClick"
+                          ContextMenuOpening="Grid_ContextMenuOpening">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="设备" Binding="{Binding Name}" Width="1.6*" />
+                        <DataGridTextColumn Header="型号" Binding="{Binding Model}" Width="*" />
+                        <DataGridTextColumn Header="系统" Binding="{Binding Android}" Width="0.7*" />
+                        <DataGridTextColumn Header="连接" Binding="{Binding ConnText}" Width="1.2*" />
+                        <DataGridTextColumn Header="地址" Binding="{Binding Addr}" Width="1.3*" />
+                        <DataGridTextColumn Header="电量" Binding="{Binding BatteryText}" Width="0.8*" />
+                        <DataGridTextColumn Header="状态" Binding="{Binding StateText}" Width="0.7*" />
+                    </DataGrid.Columns>
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsOffline}" Value="True">
+                                    <Setter Property="Opacity" Value="0.45" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <!-- 占位的空菜单：WPF 只有元素挂着 ContextMenu 才会触发 ContextMenuOpening，
+                         菜单项在 code-behind 里按这一行的状态现搭（对应旧前端的 buildMenu）。 -->
+                    <DataGrid.ContextMenu>
+                        <ContextMenu />
+                    </DataGrid.ContextMenu>
+                </DataGrid>
+            </Border>
+
+            <TextBlock Grid.Row="4" Margin="2,10,0,0" FontSize="12" Opacity="0.75"
+                       AutomationProperties.AutomationId="lblFooter"
+                       Text="{Binding FooterText}" />
+        </Grid>
+
+        <!-- 投屏进度卡片：双击 / 右键投屏后出现，点一下即关 -->
+        <Border Grid.Row="1" x:Name="Toast" AutomationProperties.AutomationId="toastCard"
+                Visibility="{Binding ToastVisible, Converter={StaticResource BoolVis}}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,24,24" MinWidth="280" MaxWidth="420"
+                Padding="14,10" CornerRadius="8"
+                MouseLeftButtonUp="Toast_MouseLeftButtonUp"
+                Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="ToastIcon" Width="22" VerticalAlignment="Center"
+                           FontSize="16" Text="{Binding ToastGlyph}" />
+                <StackPanel Margin="10,0,0,0">
+                    <TextBlock Text="{Binding ToastTitle}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ToastSub}" FontSize="12" Opacity="0.8"
+                               TextWrapping="Wrap" Margin="0,2,0,0"
+                               Visibility="{Binding ToastSub, Converter={StaticResource NonEmptyVis}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</ui:FluentWindow>

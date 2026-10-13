@@ -1,0 +1,48 @@
+# Line endings are pinned per extension so a clone stays runnable on both OSes.
+
+# Windows-only scripts MUST keep CRLF:
+#   - cmd.exe mangles .bat when it is run with LF line endings
+#   - PowerShell reads a .ps1 as GBK unless a UTF-8 BOM says otherwise (see README encoding rule)
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# macOS / cross-platform shell + double-click launchers MUST be LF (CRLF breaks the #! shebang)
+*.sh      text eol=lf
+*.command text eol=lf
+
+# Plain text docs and config -> LF everywhere
+*.md    text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+LICENSE text eol=lf
+
+# Web UI front-end -> LF (harmless to browsers, but keeps diffs clean across OSes)
+*.html text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+
+# macOS .app bundle components
+*.plist              text eol=lf
+packaging/macos/launcher text eol=lf
+
+# Windows Inno Setup script
+*.iss text eol=crlf
+
+# Windows WPF (.NET) 工程：Visual Studio 习惯 CRLF；Roslyn 读无 BOM 的 UTF-8 没问题，
+# 所以中文注释可以直接写，只要别把文件存成 GBK。
+*.cs     text eol=crlf
+*.xaml   text eol=crlf
+*.csproj text eol=crlf
+*.sln    text eol=crlf
+
+# Binary assets
+*.ico binary
+*.png binary
+*.exe binary
+*.dll binary
+
+# Windows 发布物旁边的 tools\（adb.exe / scrcpy.exe / *.dll / scrcpy-server）
+# 全部按二进制存，绝不做换行转换，否则 exe 与 dll 会被改坏。
+packaging/windows/Dist/tools/** binary

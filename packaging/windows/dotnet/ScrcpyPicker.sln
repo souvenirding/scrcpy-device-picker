@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C04F217D-3442-4E9E-863A-16B6877E93E3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScrcpyPicker", "src\ScrcpyPicker\ScrcpyPicker.csproj", "{51EB884C-AB1C-472D-8686-644A7680F626}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{DB4B6710-F2CD-4C91-90B9-D2A397E78414}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScrcpyPicker.Tests", "tests\ScrcpyPicker.Tests\ScrcpyPicker.Tests.csproj", "{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{51EB884C-AB1C-472D-8686-644A7680F626}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{51EB884C-AB1C-472D-8686-644A7680F626}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{51EB884C-AB1C-472D-8686-644A7680F626}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{51EB884C-AB1C-472D-8686-644A7680F626}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{51EB884C-AB1C-472D-8686-644A7680F626} = {C04F217D-3442-4E9E-863A-16B6877E93E3}
+		{2DFB1982-3256-4E4D-9E47-80BE7CA2C43A} = {DB4B6710-F2CD-4C91-90B9-D2A397E78414}
+	EndGlobalSection
+EndGlobal

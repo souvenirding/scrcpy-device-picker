@@ -1,0 +1,49 @@
+{
+  "devices": {
+    "0123456789abcdef": {
+      "ts": "2026-01-01T10:00:00.0000000+08:00",
+      "Model": "Sample Model A",
+      "Device": "samplea",
+      "Android": "14",
+      "Brand": "Xiaomi",
+      "DevName": "Sample A",
+      "WifiIp": "192.168.1.20",
+      "Battery": "88",
+      "Charging": "放电",
+      "Alias": "",
+      "TlsLast": "192.168.1.20:41825"
+    },
+    "a1b2c3d4e5f6a7b8": {
+      "ts": "2026-01-01T10:00:00.0000000+08:00",
+      "Model": "Sample Model B",
+      "Device": "sampleb",
+      "Android": "13",
+      "Brand": "Google",
+      "DevName": "Sample B",
+      "WifiIp": "192.168.1.21",
+      "Battery": "61",
+      "Charging": "放电",
+      "Alias": "",
+      "TlsLast": "192.168.1.21:43902"
+    },
+    "0123ABCDEF456789": {
+      "ts": "2026-01-01T10:00:00.0000000+08:00",
+      "Model": "Sample Model C",
+      "Device": "samplec",
+      "Android": "13",
+      "Brand": "vivo",
+      "DevName": "Sample C",
+      "WifiIp": "192.168.1.22",
+      "Battery": "100",
+      "Charging": "",
+      "Alias": "",
+      "TlsLast": "192.168.1.22:44710",
+      "KnownUsb": true
+    }
+  },
+  "settings": {
+    "preferUsb": true,
+    "scanSubnet": true,
+    "navBar": true
+  }
+}
