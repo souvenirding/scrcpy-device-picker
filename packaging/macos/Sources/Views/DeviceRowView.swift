@@ -1,7 +1,8 @@
 // DeviceRowView.swift - 设备单行渲染（design 2.5.1 职责表 / 2.9 R9，spec 5.1）
 //
-// 纯渲染视图：行数据与「启动中」标志经参数注入，不含业务逻辑（spec 6.1 规则 1）；
-// 双击投屏与右键菜单由 DeviceListScreen 行级修饰符挂载（design 2.5.1 视图树分工）。
+// 纯渲染视图：行数据与「启动中」/「传输中」/「拖放悬停」标志经参数注入，
+// 不含业务逻辑、不引入 EnvironmentObject（spec 6.1 规则 1；design 1.2.6 第 2 点）；
+// 双击投屏、右键菜单与文件拖放由 DeviceListScreen 行级修饰符挂载（design 2.5.1 视图树分工）。
 // 七列布局（spec 5.1 规则 1）：设备/型号/系统/连接/地址/电量/状态；
 // 各列 minWidth + layoutPriority 保证窗口缩放（min 640×400）时列宽稳定，
 // 地址列允许中段截断（design 2.9 R9）。
@@ -12,6 +13,10 @@ struct DeviceRowView: View {
     let row: DeviceRowVM
     /// 该行是否处于「启动中」（castingKeys 含 key，spec 5.1 规则 6）
     let isCasting: Bool
+    /// 该行是否有进行中的文件传输（transferringKeys 含 key，FT-PROG-6 / D15）
+    let isTransferring: Bool
+    /// 该行是否为当前拖拽悬停的放置目标（dropTargetedKey == key，FT-DRAG-6）
+    let isDropTargeted: Bool
 
     /// 各列最小宽度（pt，design 2.9 R9：空间不足时先截地址列，保设备/状态列）
     private enum Column {
@@ -40,7 +45,17 @@ struct DeviceRowView: View {
         }
         .padding(.vertical, 2)
         .opacity(row.offline ? Self.offlineOpacity : 1)
-        .background(isCasting ? Color.accentColor.opacity(0.12) : Color.clear)
+        .background(rowBackground)
+    }
+
+    // MARK: - 行背景（投屏中 0.12 / 拖放悬停 0.18，互斥取一）
+
+    /// 悬停高亮仅对在线行生效（FT-DRAG-6 红线：离线行悬停不高亮）；
+    /// 与投屏中背景互斥取一（design 2.9.2 第 3 行）
+    private var rowBackground: Color {
+        if isDropTargeted && row.online { return Color.accentColor.opacity(0.18) }
+        if isCasting { return Color.accentColor.opacity(0.12) }
+        return Color.clear
     }
 
     // MARK: - 设备列（spec 5.1 规则 2：状态圆点 + 显示名）
@@ -57,7 +72,7 @@ struct DeviceRowView: View {
         .frame(minWidth: Column.deviceWidth, alignment: .leading)
     }
 
-    // MARK: - 状态列三态（spec 5.1 规则 6：启动中 / 离线 / 在线）
+    // MARK: - 状态列四态（D15：启动中… > 传输中 > 离线 / 在线）
 
     @ViewBuilder
     private var statusColumn: some View {
@@ -66,6 +81,12 @@ struct DeviceRowView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("启动中…")
+            }
+        } else if isTransferring {
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(TransferCardText.transferringRowStatus)
             }
         } else if row.offline {
             Text("离线")

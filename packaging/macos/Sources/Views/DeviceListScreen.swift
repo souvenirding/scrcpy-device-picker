@@ -6,11 +6,14 @@
 // 异常时回退 NSAlert+NSTextField 附件视图）；移除确认 confirmationDialog。
 // ViewModel 经 @EnvironmentObject 注入（AppDelegate 装配，T13）；
 // 视图无业务逻辑，全部命令经 DeviceListViewModel（spec 6.1 规则 1/2）。
+// 文件传输：行级 onDrop 与传输卡片区由 TransferViewModel 承载（design 2.4.5 / 2.4.8）。
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DeviceListScreen: View {
 
     @EnvironmentObject private var viewModel: DeviceListViewModel
+    @EnvironmentObject private var transferViewModel: TransferViewModel
 
     /// 备注名输入草稿；nil = 未编辑（跟随对话框预填值，spec 5.6 规则 1）。
     /// State 值类型直用（非 @State 属性包装语法）：本机 CLT swiftc 缺
@@ -27,10 +30,14 @@ struct DeviceListScreen: View {
             footer
         }
         .overlay(alignment: .bottomTrailing) {
-            if let toast = viewModel.toast {
-                CastToastView(toast: toast, viewModel: viewModel)
-                    .padding(16)
+            // 右下角提示区：传输卡片区在上、投屏 toast 在下，同屏共存互不遮挡（FT-PROG-3）
+            VStack(alignment: .trailing, spacing: 8) {
+                TransferCardsView()
+                if let toast = viewModel.toast {
+                    CastToastView(toast: toast, viewModel: viewModel)
+                }
             }
+            .padding(16)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -69,7 +76,11 @@ struct DeviceListScreen: View {
     private var deviceList: some View {
         List {
             ForEach(viewModel.rows) { row in
-                DeviceRowView(row: row, isCasting: viewModel.castingKeys.contains(row.key))
+                DeviceRowView(row: row,
+                              isCasting: viewModel.castingKeys.contains(row.key),
+                              // D15 纯展示组合：两个 ViewModel 的集合在行渲染处读取后注入
+                              isTransferring: transferViewModel.transferringKeys.contains(row.key),
+                              isDropTargeted: transferViewModel.dropTargetedKey == row.key)
                     .contextMenu {
                         DeviceContextMenu(row: row, viewModel: viewModel)
                     }
@@ -78,6 +89,13 @@ struct DeviceListScreen: View {
                         if !row.offline {
                             viewModel.cast(key: row.key, mode: .auto)
                         }
+                    }
+                    // 行级拖放：全部行都挂（含离线行）—— 投放离线行由服务层防线
+                    // 给出提示卡片，而非静默吞掉（FT-DRAG-4 / design 2.4.5）。
+                    // List / Screen 级不挂 onDrop → 空白、横幅、状态栏天然无放置目标（FT-DRAG-5）
+                    .onDrop(of: [UTType.fileURL],
+                            isTargeted: dropTargetedBinding(row.key)) { providers in
+                        transferViewModel.handleDrop(key: row.key, providers: providers)
                     }
             }
         }
@@ -91,6 +109,23 @@ struct DeviceListScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    // MARK: - 拖放悬停绑定（design 2.4.5）
+
+    /// isTargeted 读写映射到 TransferViewModel 的 dropTargetedKey 单槽位：
+    /// get = 当前悬停行是否为本行；set = 进入写入 key、离开且仍为本行时置空。
+    private func dropTargetedBinding(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { transferViewModel.dropTargetedKey == key },
+            set: { targeted in
+                if targeted {
+                    transferViewModel.setDropTargeted(key)
+                } else if transferViewModel.dropTargetedKey == key {
+                    transferViewModel.setDropTargeted(nil)
+                }
+            }
+        )
     }
 
     // MARK: - 底部状态栏（spec 5.1 规则 10 / 5.2 规则 5）

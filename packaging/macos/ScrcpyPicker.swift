@@ -25,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var service: DeviceService!
     var listViewModel: DeviceListViewModel!
     var navViewModel: NavBarViewModel!
+    var transferManager: TransferManager!
+    var transferViewModel: TransferViewModel!
     var navPanel: NavBarPanel?
     var navPollTimer: Timer?
 
@@ -78,6 +80,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         listViewModel = DeviceListViewModel(service: service)
         navViewModel = NavBarViewModel(service: service)
         navViewModel.attach(listViewModel)
+        // 传输模块共享既有实例：tools / discovery 与 DeviceService 同源
+        // （快照同源、工具同源，design 1.2.4 第 3 点）
+        transferManager = TransferManager(service: service, tools: service.tools,
+                                          discovery: service.discovery)
+        transferViewModel = TransferViewModel(service: service, manager: transferManager)
+        transferViewModel.start()
         return true
     }
 
@@ -97,7 +105,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.minSize = NSSize(width: 640, height: 400)
 
         window.contentView = NSHostingView(
-            rootView: DeviceListScreen().environmentObject(listViewModel))
+            rootView: DeviceListScreen()
+                .environmentObject(listViewModel)
+                .environmentObject(transferViewModel))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -172,6 +182,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         navPollTimer?.invalidate()
         navPollTimer = nil
         service?.stopRefreshLoop()
+        // 关窗即退出：终止全部进行中的 adb 传输进程，不留孤儿（FT-ERR-10 / AC-19）
+        transferManager?.cancelAll()
     }
 }
 
