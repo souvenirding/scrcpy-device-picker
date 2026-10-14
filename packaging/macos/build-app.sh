@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # --- configurable source paths ---
 PWSH_SRC="${PWSH_SRC:-$HOME/powershell}"
 SCRCPY_SRC="${SCRCPY_SRC:-$HOME/scrcpy-tools}"
-APP_VERSION="${APP_VERSION:-1.0.0}"
+APP_VERSION="${APP_VERSION:-1.1.0}"
 ARCH="$(uname -m)"   # arm64 or x86_64
 
 # --- output paths ---

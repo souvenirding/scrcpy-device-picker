@@ -13,7 +13,8 @@
 - **Windows**：原生 C# / WPF 程序（Fluent 风格控件表格 + 服务层直接调度 adb/scrcpy），self-contained 单 exe，
   双击即用、零 PowerShell / 浏览器 / .NET 依赖。
 - **macOS**：原生 Swift 程序（SwiftUI 原生界面 + 进程内服务 + adb/scrcpy 调度），打包成一个
-  `ScrcpyPicker.app`，**30 MB**，双击即用、零依赖。
+  `ScrcpyPicker.app`，**32 MB**，双击即用、零依赖。另带**文件互传**：拖文件到设备行即推送到手机
+  `/sdcard/Download`，右键设备行可把 `Download / DCIM / Pictures` 拉回本机 `~/Downloads`。
 
 ## 下载
 
@@ -75,7 +76,7 @@ Android SDK 与 scrcpy 的常见安装位置，最后在固定盘里做一次受
 ### macOS
 
 **双击 `ScrcpyPicker.app` 就能用，不装任何东西** —— app 是纯原生 Swift 程序（不打包 PowerShell），
-`adb` 和 `scrcpy` 直接内嵌，整个 app **30 MB**（zip 分发约 14 MB），自带原生窗口，不需要浏览器。
+`adb` 和 `scrcpy` 直接内嵌，整个 app **32 MB**（zip 分发约 14 MB），自带原生窗口，不需要浏览器。
 第一次打开若被 Gatekeeper 拦，**右键 → 打开** 绕过一次即可。
 
 只有**从源码重新打包 `.app`** 时才需要准备工具（Xcode Command Line Tools 的 `swiftc` + 官方
