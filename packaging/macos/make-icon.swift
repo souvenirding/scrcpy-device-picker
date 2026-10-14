@@ -72,9 +72,9 @@ func makeContext(_ w: Int, _ h: Int) -> CGContext {
                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
         fatalError("无法创建 \(w)x\(h) 绘图上下文")
     }
-    // 统一成「第 0 行 = 图像顶行」，后续全部按 top-down 下标处理
-    ctx.translateBy(x: 0, y: CGFloat(h))
-    ctx.scaleBy(x: 1, y: -1)
+    // 注意：这里**不要**加 translate/scale 翻转。
+    // CGBitmapContext 的缓冲第 0 行就是图像顶行，CGImage 直接 draw 进去方向已经正确；
+    // 多加一次翻转会让除 1024 档（恰好被翻转两次抵消）以外的所有档位上下颠倒。
     ctx.interpolationQuality = .high
     return ctx
 }
@@ -284,6 +284,43 @@ func writePNG(_ bm: Bitmap, to path: String) {
     try! pngData(bm).write(to: URL(fileURLWithPath: path))
 }
 
+/// 图形体内「上亮下暗」的均值对，用来判断方向
+func toneBands(_ bm: Bitmap) -> (top: Float, bottom: Float)? {
+    let body = Int((Double(bm.width) * Double(iconBody) / Double(iconCanvas)).rounded())
+    let off = (bm.width - body) / 2
+    guard body >= 8 else { return nil }
+    var top: Float = 0, bottom: Float = 0
+    var nt = 0, nb = 0
+    for y in off..<(off + body) {
+        for x in off..<(off + body) {
+            let i = bm.offset(x, y)
+            guard bm.px[i + 3] > 200 else { continue }
+            if y < off + body / 5 { top += Float(bm.px[i + 1]); nt += 1 }
+            else if y > off + body - body / 5 { bottom += Float(bm.px[i + 1]); nb += 1 }
+        }
+    }
+    guard nt > 0, nb > 0 else { return nil }
+    return (top / Float(nt), bottom / Float(nb))
+}
+
+/// 方向自检：每一档的明暗走向必须与主图一致。
+/// （开发时踩过一次：给绘图上下文多加了一层翻转，1024 档因两次翻转抵消而正常，
+///  其余档位全部上下颠倒，且肉眼只在小尺寸上才看得出来 —— 所以这里直接断死。）
+func assertOrientation(_ derived: Bitmap, reference: Bitmap, label: String) {
+    guard let ref = toneBands(reference), let got = toneBands(derived) else { return }
+    guard abs(ref.top - ref.bottom) > 8 else { return }   // 上下本来就没差异，跳过
+    if (got.top > got.bottom) != (ref.top > ref.bottom) {
+        print("ERROR: \(label) 的方向与主图相反（缩放阶段把图翻过来了）")
+        exit(1)
+    }
+}
+
+/// 写文件前统一过一遍方向自检
+func emit(_ bm: Bitmap, to path: String, label: String, reference: Bitmap) {
+    assertOrientation(bm, reference: reference, label: label)
+    writePNG(bm, to: path)
+}
+
 func u16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)] }
 func u32(_ v: Int) -> [UInt8] {
     [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]
@@ -317,9 +354,10 @@ func dibPayload(_ bm: Bitmap) -> Data {
     return d
 }
 
-func writeICO(_ images: [Bitmap], to path: String) {
+func writeICO(_ images: [Bitmap], to path: String, reference: Bitmap) {
     var payloads: [(side: Int, data: Data)] = []
     for bm in images {
+        assertOrientation(bm, reference: reference, label: "picker.ico \(bm.width)px")
         payloads.append((bm.width, bm.width >= icoPNGThreshold ? pngData(bm) : dibPayload(bm)))
     }
     let headerSize = 6 + 16 * payloads.count
@@ -384,16 +422,17 @@ let slots: [(name: String, side: Int)] = [
     ("icon_512x512.png", 512), ("icon_512x512@2x.png", 1024),
 ]
 for slot in slots {
-    writePNG(derive(master, side: slot.side), to: iconsetDir + "/" + slot.name)
+    emit(derive(master, side: slot.side), to: iconsetDir + "/" + slot.name,
+         label: slot.name, reference: master)
 }
-print("==> iconset: \(slots.count) 个档位 -> \(iconsetDir)")
+print("==> iconset: \(slots.count) 个档位 -> \(iconsetDir)（方向自检通过）")
 
 try! fm.createDirectory(atPath: docsDir, withIntermediateDirectories: true)
 let docPath = docsDir + "/app-icon.png"
-writePNG(derive(master, side: docSize), to: docPath)
+emit(derive(master, side: docSize), to: docPath, label: "app-icon.png", reference: master)
 print("==> 文档展示图: \(docPath)（\(docSize)px，透明底）")
 
 try! fm.createDirectory(atPath: assetsDir, withIntermediateDirectories: true)
 let icoPath = assetsDir + "/picker.ico"
-writeICO(icoSizes.map { derive(master, side: $0) }, to: icoPath)
+writeICO(icoSizes.map { derive(master, side: $0) }, to: icoPath, reference: master)
 print("==> Windows 图标: \(icoPath)（档位 \(icoSizes.map(String.init).joined(separator: "/"))）")
