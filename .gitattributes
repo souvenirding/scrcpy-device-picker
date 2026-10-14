@@ -38,10 +38,11 @@ packaging/macos/launcher text eol=lf
 *.sln    text eol=crlf
 
 # Binary assets
-*.ico binary
-*.png binary
-*.exe binary
-*.dll binary
+*.ico  binary
+*.icns binary
+*.png  binary
+*.exe  binary
+*.dll  binary
 
 # Windows 发布物旁边的 tools\（adb.exe / scrcpy.exe / *.dll / scrcpy-server）
 # 全部按二进制存，绝不做换行转换，否则 exe 与 dll 会被改坏。
