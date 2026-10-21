@@ -1,9 +1,12 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Win32;
+using ScrcpyPicker.Models;
 using ScrcpyPicker.ViewModels;
 
 namespace ScrcpyPicker.Views;
@@ -101,6 +104,22 @@ public partial class MainWindow
             Add(menu, "多任务", Vm?.SendOverviewCommand, item);
             if (item.HasTls) Add(menu, "断开无线会话", Vm?.DisconnectDeviceCommand, item);
             menu.Items.Add(new Separator());
+
+            // 文件互传（macOS 1.1.0 同款两项，只在在线分支）。这里直接搭 MenuItem：
+            // 推送项要弹文件选择框，拉取项是三项子菜单，都不适合走 Add(menu, ...) 命令绑定。
+            var push = new MenuItem { Header = "推送文件到设备…", IsEnabled = Vm is not null };
+            push.Click += (_, _) => PromptPushFiles(item);
+            menu.Items.Add(push);
+
+            var pull = new MenuItem { Header = "从设备拉取文件", IsEnabled = Vm is not null };
+            foreach (QuickPullDirectory directory in Vm?.Transfer.QuickPullDirectories
+                         ?? Array.Empty<QuickPullDirectory>())
+            {
+                var child = new MenuItem { Header = "拉取 " + directory.DisplayName + " 目录" };
+                child.Click += (_, _) => Vm?.Transfer.PullQuickDirectory(item.Key, directory);
+                pull.Items.Add(child);
+            }
+            menu.Items.Add(pull);
         }
 
         Add(menu, "设置备注名…", Vm?.RequestAliasCommand, item);
@@ -118,6 +137,101 @@ public partial class MainWindow
             CommandParameter = item,
             IsEnabled = enabled && command is not null,
         });
+    }
+
+    // ---- 文件拖放（FT-DRAG：仅在线行接收，悬停高亮 0.18） ----
+
+    private DeviceItem? _dropRow;
+
+    private void Grid_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            SetDropTarget(null);
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        DeviceItem? item = ItemAt(e.OriginalSource as DependencyObject);
+        if (item is null || item.IsOffline || Vm is null)
+        {
+            SetDropTarget(null);
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        SetDropTarget(item);
+        e.Effects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private void Grid_PreviewDragLeave(object sender, DragEventArgs e)
+    {
+        // 行间移动也会触发 DragLeave，只有指针真的离开表格才清高亮（DragOver 会接力换行）。
+        if (!dgDevices.IsMouseOver) SetDropTarget(null);
+    }
+
+    private void Grid_PreviewDrop(object sender, DragEventArgs e)
+    {
+        SetDropTarget(null);
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+
+        DeviceItem? item = ItemAt(e.OriginalSource as DependencyObject);
+        if (item is null || item.IsOffline) return;
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] paths && paths.Length > 0)
+        {
+            // 文件和文件夹都能拖；服务层按顶层投放项逐个推送（与 macOS FT-DRAG-2 一致）。
+            Vm?.Transfer.PushFiles(item.Key, paths);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>同一时刻只让一行亮着；切行时先把旧行熄掉。</summary>
+    private void SetDropTarget(DeviceItem? item)
+    {
+        if (ReferenceEquals(_dropRow, item)) return;
+        if (_dropRow is not null) _dropRow.IsDropTargeted = false;
+        _dropRow = item;
+        if (_dropRow is not null) _dropRow.IsDropTargeted = true;
+    }
+
+    /// <summary>菜单「推送文件到设备…」：多选文件；文件夹走拖放（WPF 文件框不能混选目录）。</summary>
+    private void PromptPushFiles(DeviceItem item)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择要推送到设备的文件",
+            Filter = "所有文件 (*.*)|*.*",
+            Multiselect = true,
+            CheckFileExists = true,
+            CheckPathExists = true,
+        };
+        if (dialog.ShowDialog(this) != true || dialog.FileNames.Length == 0) return;
+        Vm?.Transfer.PushFiles(item.Key, dialog.FileNames);
+    }
+
+    // ---- 传输卡片 ----
+
+    /// <summary>点击终态卡片关闭；进行中卡片只能点「取消」，点卡片本身不响应。</summary>
+    private void TransferCard_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: TransferCardItem card }) return;
+        if (HasButtonAncestor(e.OriginalSource as DependencyObject)) return;
+        Vm?.Transfer.DismissCard(card);
+    }
+
+    private static bool HasButtonAncestor(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ButtonBase) return true;
+            source = source is Visual
+                ? VisualTreeHelper.GetParent(source)
+                : LogicalTreeHelper.GetParent(source);
+        }
+        return false;
     }
 
     private void Toast_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Vm?.HideToast();

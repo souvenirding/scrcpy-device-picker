@@ -50,6 +50,11 @@ public sealed partial class MainViewModel : ObservableObject
         preferUsb = backend.PreferUsb;
         navBarOn = backend.NavBarOn;
 
+        // 文件互传：服务层回调在后台线程，TransferCenter 负责切回 UI 线程。
+        Transfer = new TransferCenter(backend.Transfers, ResolveDeviceName,
+            System.Windows.Application.Current.Dispatcher);
+        Transfer.DeviceTransferStateChanged += OnTransferStateChanged;
+
         _navs = new NavBarService(SendKeyByKey, msg => Toast("ok", msg, string.Empty, 2600),
             pid => _backend.Casts.IsAlive(pid));
         _navs.Enabled = NavBarOn;
@@ -67,6 +72,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private ObservableCollection<DeviceItem> devices;
+
+    /// <summary>文件互传的卡片区与命令入口（XAML 绑定 Transfer.*）。</summary>
+    public TransferCenter Transfer { get; }
 
     [ObservableProperty]
     private string bannerText = string.Empty;
@@ -182,7 +190,8 @@ public sealed partial class MainViewModel : ObservableObject
     private void ApplyRows(List<WebRow> rows, StatusInfo st)
     {
         Devices = new ObservableCollection<DeviceItem>(
-            rows.Select(r => new DeviceItem(r, _casting.Contains(r.Key))));
+            rows.Select(r => new DeviceItem(
+                r, _casting.Contains(r.Key), Transfer.IsTransferring(r.Key))));
 
         string whenText = "—";
         if (DateTimeOffset.TryParse(st.LastRefresh, CultureInfo.InvariantCulture,
@@ -460,6 +469,23 @@ public sealed partial class MainViewModel : ObservableObject
         if (item is not null) item.IsCasting = on;
     }
 
+    /// <summary>TransferCenter 已切到 UI 线程；列表重绘后仍按 Key 贴回「传输中」。</summary>
+    private void OnTransferStateChanged(string key, bool active)
+    {
+        var item = Devices.FirstOrDefault(d => d.Key == key);
+        if (item is not null) item.IsTransferring = active;
+    }
+
+    /// <summary>显示名：先用界面行，再退回服务层快照，最后兜底 Key。</summary>
+    private string ResolveDeviceName(string key)
+    {
+        string fromRows = Devices.FirstOrDefault(d => d.Key == key)?.Name ?? string.Empty;
+        if (fromRows.Length > 0) return fromRows;
+        string fromBackend = _backend.SnapshotRows()
+            .FirstOrDefault(r => r.Key == key)?.Name ?? string.Empty;
+        return fromBackend.Length > 0 ? fromBackend : key;
+    }
+
     /// <summary>
     /// 投屏起来后挂上导航条。开关关着就不挂；pid 为 0（没起来）也不挂。
     /// 注意本版没有托盘：主窗口关掉就是进程退出，导航条跟着收。
@@ -608,5 +634,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _timer.Stop();
         _navs?.Dispose();   // 主窗口关了条子也得收掉，不能留一堆孤儿 HUD
+        // 关窗即退出：终止全部进行中的 adb 传输（不留孤儿进程与半包）
+        Transfer.Dispose();
     }
 }

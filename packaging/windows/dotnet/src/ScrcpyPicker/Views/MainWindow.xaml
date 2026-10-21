@@ -14,6 +14,9 @@
     <ui:FluentWindow.Resources>
         <views:BoolToVisibilityConverter x:Key="BoolVis" />
         <views:NonEmptyToVisibilityConverter x:Key="NonEmptyVis" />
+        <!-- 行状态底色：投屏中 / 拖拽悬停（只给在线行，离线行不会亮） -->
+        <SolidColorBrush x:Key="CastRowBrush" Color="#1F0078D4" />
+        <SolidColorBrush x:Key="DropRowBrush" Color="#2E0078D4" />
     </ui:FluentWindow.Resources>
 
     <Grid>
@@ -140,6 +143,10 @@
                           Background="Transparent"
                           BorderThickness="0"
                           RowHeight="32"
+                          AllowDrop="True"
+                          PreviewDragOver="Grid_PreviewDragOver"
+                          PreviewDragLeave="Grid_PreviewDragLeave"
+                          PreviewDrop="Grid_PreviewDrop"
                           MouseDoubleClick="Grid_MouseDoubleClick"
                           ContextMenuOpening="Grid_ContextMenuOpening">
                     <DataGrid.Columns>
@@ -157,6 +164,13 @@
                                 <DataTrigger Binding="{Binding IsOffline}" Value="True">
                                     <Setter Property="Opacity" Value="0.45" />
                                 </DataTrigger>
+                                <!-- 与 macOS 一致：投屏中 0.12、拖放悬停 0.18，悬停优先（同一行两者不会同时出现） -->
+                                <DataTrigger Binding="{Binding IsCasting}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource CastRowBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsDropTargeted}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource DropRowBrush}" />
+                                </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </DataGrid.RowStyle>
@@ -173,26 +187,84 @@
                        Text="{Binding FooterText}" />
         </Grid>
 
-        <!-- 投屏进度卡片：双击 / 右键投屏后出现，点一下即关 -->
-        <Border Grid.Row="1" x:Name="Toast" AutomationProperties.AutomationId="toastCard"
-                Visibility="{Binding ToastVisible, Converter={StaticResource BoolVis}}"
-                HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                Margin="0,0,24,24" MinWidth="280" MaxWidth="420"
-                Padding="14,10" CornerRadius="8"
-                MouseLeftButtonUp="Toast_MouseLeftButtonUp"
-                Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
-                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="ToastIcon" Width="22" VerticalAlignment="Center"
-                           FontSize="16" Text="{Binding ToastGlyph}" />
-                <StackPanel Margin="10,0,0,0">
-                    <TextBlock Text="{Binding ToastTitle}" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding ToastSub}" FontSize="12" Opacity="0.8"
-                               TextWrapping="Wrap" Margin="0,2,0,0"
-                               Visibility="{Binding ToastSub, Converter={StaticResource NonEmptyVis}}" />
+        <!-- 右下角提示区：传输卡片在上，投屏/操作 toast 在下 -->
+        <StackPanel Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,24,24">
+            <!-- 文件传输卡片：进行中置顶，最多三张，其余折成 "+N 个传输中" -->
+            <ItemsControl ItemsSource="{Binding Transfer.VisibleCards}"
+                          AutomationProperties.AutomationId="transferCards">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Tag="{Binding}"
+                                MouseLeftButtonUp="TransferCard_MouseLeftButtonUp"
+                                Margin="0,0,0,8" MinWidth="300" MaxWidth="420"
+                                Padding="14,10" CornerRadius="8"
+                                Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Width="22" VerticalAlignment="Top"
+                                           FontSize="16" Text="{Binding Glyph}" />
+                                <StackPanel Grid.Column="1" Margin="10,0,8,0">
+                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding Subtitle}" FontSize="12" Opacity="0.8"
+                                               TextWrapping="Wrap" Margin="0,2,0,0"
+                                               Visibility="{Binding Subtitle, Converter={StaticResource NonEmptyVis}}" />
+                                    <Grid Margin="0,6,0,0"
+                                          Visibility="{Binding ShowProgress, Converter={StaticResource BoolVis}}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ProgressBar Grid.Column="0" Height="4" Minimum="0" Maximum="100"
+                                                     VerticalAlignment="Center"
+                                                     Value="{Binding ProgressValue, Mode=OneWay}"
+                                                     IsIndeterminate="{Binding IsIndeterminate, Mode=OneWay}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding PercentText}"
+                                                   FontSize="11" Margin="8,0,0,0" MinWidth="48"
+                                                   TextAlignment="Right" />
+                                    </Grid>
+                                </StackPanel>
+                                <ui:Button Grid.Column="2" Content="取消" Appearance="Secondary"
+                                           FontSize="11" Padding="8,2" VerticalAlignment="Top"
+                                           Visibility="{Binding ShowCancel, Converter={StaticResource BoolVis}}"
+                                           Command="{Binding DataContext.Transfer.CancelCardCommand,
+                                                     RelativeSource={RelativeSource AncestorType=Window}}"
+                                           CommandParameter="{Binding}" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Text="{Binding Transfer.OverflowText}" HorizontalAlignment="Right"
+                       FontSize="12" Opacity="0.75" Margin="0,0,0,8"
+                       Visibility="{Binding Transfer.OverflowText, Converter={StaticResource NonEmptyVis}}" />
+
+            <!-- 投屏进度卡片：双击 / 右键投屏后出现，点一下即关 -->
+            <Border x:Name="Toast" AutomationProperties.AutomationId="toastCard"
+                    Visibility="{Binding ToastVisible, Converter={StaticResource BoolVis}}"
+                    MinWidth="280" MaxWidth="420" Padding="14,10" CornerRadius="8"
+                    MouseLeftButtonUp="Toast_MouseLeftButtonUp"
+                    Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="ToastIcon" Width="22" VerticalAlignment="Center"
+                               FontSize="16" Text="{Binding ToastGlyph}" />
+                    <StackPanel Margin="10,0,0,0">
+                        <TextBlock Text="{Binding ToastTitle}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding ToastSub}" FontSize="12" Opacity="0.8"
+                                   TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Visibility="{Binding ToastSub, Converter={StaticResource NonEmptyVis}}" />
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
-        </Border>
+            </Border>
+        </StackPanel>
     </Grid>
 </ui:FluentWindow>

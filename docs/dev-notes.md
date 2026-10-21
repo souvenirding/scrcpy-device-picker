@@ -11,9 +11,9 @@
 | `assets/picker.ico` | 快捷方式图标（由 scrcpy 的 png 转成 PNG-in-ICO） |
 | `packaging/macos/main.swift` / `ScrcpyPicker.swift` / `NavBar.swift` | macOS 入口、SwiftUI 主窗口装配（AppDelegate + MVVM）、浮动导航 HUD 面板（NavBarPanel） |
 | `packaging/macos/Info.plist` / `build-app.sh` | macOS `.app` 打包（SwiftUI 界面 + 进程内服务引擎 + NavBar 浮动工具条） |
-| `packaging/macos/Sources/*.swift` | 7 个服务层模块 + `ViewModels/`（2 个）+ `Views/`（6 个，见下表） |
-| `packaging/windows/dotnet/src/ScrcpyPicker/` | Windows WPF 工程：`Views/`（FluentWindow + DataGrid + 吸附导航条）、`ViewModels/`（MVVM）、`Services/`（toolchain/config/discovery/webrows/cast/process/navbar） |
-| `packaging/windows/dotnet/tests/` | xUnit 服务层单测（工具链候选与搜索、发现结果解析、配置读写、投屏参数、CLI、导航条几何与开关） |
+| `packaging/macos/Sources/*.swift` | 9 个服务层模块 + `ViewModels/`（3 个）+ `Views/`（8 个，见下表） |
+| `packaging/windows/dotnet/src/ScrcpyPicker/` | Windows WPF 工程：`Views/`（FluentWindow + DataGrid + 传输卡片 + 吸附导航条）、`ViewModels/`（MVVM）、`Services/`（toolchain/config/discovery/webrows/cast/transfer/process/navbar） |
+| `packaging/windows/dotnet/tests/` | xUnit 服务层单测 124 个（工具链候选与搜索、发现结果解析、无线 mDNS 解析、配置读写、投屏参数、CLI、导航条几何与开关、文件互传） |
 | `packaging/windows/dotnet/tools/` | 验证脚本：`smoke-ui.ps1`（UI Automation 冒烟）、`check-ps1.ps1`（脚本静态闸门）、`probe-uia.ps1` / `probe-menu.ps1`（UIA 探针）、`shrink-png.ps1` |
 | `packaging/windows/Setup.iss` / `build.ps1` | Windows 安装包脚本与构建脚本（**只能在 Windows 上构建**，WPF 不能交叉编译）；`build.ps1` 除了 exe 还产出便携 zip |
 | `packaging/windows/Dist/` | 发布产物：`ScrcpyPicker.exe` + `tools\` + `ScrcpyPicker-win-x64.zip` |
@@ -26,9 +26,12 @@
 |---|---|
 | `Services/ToolchainService.cs` | adb / scrcpy 定位：候选顺序、受限深度自动搜索、版本探测、缺失文案 |
 | `Services/ConfigService.cs` | `%APPDATA%\ScrcpyPicker\devices.json` 读写（原子替换、损坏自愈、中文不转义） |
-| `Services/DiscoveryService.cs` | 三通道发现 + getprop 详情解析 + 缓存合并（含换 Key 时迁移旧 Alias） |
+| `Services/DiscoveryService.cs` | 三通道发现（USB 每轮、mDNS 每轮主动连接、5555 仅深度）+ getprop 详情解析 + 缓存合并（含换 Key 时迁移旧 Alias） |
 | `Services/WebRows.cs` | 在线行 + 离线缓存行 → 界面行（在线优先、按名称排序） |
 | `Services/CastManager.cs` | scrcpy 进程管理、复用判定、孤儿认领、日志判就绪 |
+| `Services/TransferManager.cs` | 文件互传服务层：五重受理（adb / 在线 / 每设备互斥 / 全局 3 个 / 登记）、live-only 目标、字节实测进度、取消与半包清理 |
+| `Services/TransferPaths.cs` | 本机「下载」目录解析（known folder → `%USERPROFILE%\Downloads`，`SCRCPY_DOWNLOAD_DIR` 覆盖） |
+| `Models/TransferModels.cs` | 互传的纯逻辑与文案：方向/快捷目录/失败映射/落地命名/候选通道/设备字节测量 |
 | `Services/ProcessRunner.cs` | 无窗口子进程执行与输出切分 |
 | `Services/User32.cs` | `GetWindowRect` / `IsIconic` / `IsWindow` P/Invoke 声明（导航条跟随用） |
 | `Services/NavBarLayout.cs` | 导航条的**纯几何**：物理像素→DIP、投放位置（下沿/上沿/内叠）、圆角朝向，无窗口依赖，单测直接打 |
@@ -36,7 +39,9 @@
 | `Services/PickerBackend.cs` | 把上面这些缝成界面/自检用的门面 |
 | `Services/Kernel32.cs` | `QueryFullProcessImageName`（PID 复用校验） |
 | `ViewModels/MainViewModel.cs` | 命令、10 秒定时刷新、toast、工具目录面板、导航条总开关 |
-| `Views/MainWindow.xaml(.cs)` | FluentWindow 布局 + 逐行右键菜单 |
+| `ViewModels/TransferCenter.cs` | 传输卡片堆叠（进行中优先、最多三张、溢出汇总）、受理提示卡、行内「传输中」事件 |
+| `ViewModels/TransferCardItem.cs` | 单张传输卡片：四态、进度/百分比/取消按钮的可见性 |
+| `Views/MainWindow.xaml(.cs)` | FluentWindow 布局 + 逐行右键菜单 + 文件拖放 + 传输卡片区 |
 | `Views/NavBarWindow.xaml(.cs)` | 无边框自绘导航条：七颗按钮 + 拖拽脱离 / 双击重新吸附 |
 | `App.xaml.cs` | 入口、CLI 解析（`-tools` / `-no-scan` / `--selftest`） |
 
@@ -51,9 +56,11 @@
 | `RowBuilder.swift` | 设备行组装（强类型 DeviceRowVM，规则承接原 WebRows） |
 | `DeviceService.swift` | 进程内设备服务（原 `/api/*` 路由语义 + 10s 刷新循环 + 暂停态） |
 | `CastManager.swift` | scrcpy 进程管理、复用判定、就绪探测 |
+| `TransferManager.swift` / `TransferTypes.swift` | 文件互传服务层与强类型契约（与 Windows 版同一套规则） |
 | `ViewModels/DeviceListViewModel.swift` | 主窗口 ViewModel（可观察状态 / 命令 / toast·banner 状态机） |
 | `ViewModels/NavBarViewModel.swift` | 导航条 ViewModel（isVisible 显隐 + 按键命令） |
-| `Views/*.swift`（6 个） | SwiftUI 视图：DeviceListScreen / DeviceRowView / DeviceContextMenu / BannerView / CastToastView / NavBarView |
+| `ViewModels/TransferViewModel.swift` | 传输卡片堆叠、行内传输状态、拖放聚合 |
+| `Views/*.swift`（8 个） | SwiftUI 视图：DeviceListScreen / DeviceRowView / DeviceContextMenu / BannerView / CastToastView / NavBarView / TransferCardsView / FilePickPanel |
 
 ---
 
@@ -80,6 +87,24 @@
 - **命令行自检**：Windows 有 `ScrcpyPicker.exe --selftest [-out 文件]`——不建窗口跑一遍服务层，
   把工具链解析结果 / 设备清单 / 版本写成 JSON，退出码 `0` = adb 已解析、`2` = 没找到 adb，
   发布后的无头冒烟就靠它。macOS 目前没有对应入口（如需，可在 `DeviceService.swift` 加一个自检方法）。
+
+### Windows 无线发现（1.1.0）
+
+Windows 端从 1.1.0 起**主动开启无线扫描**（macOS 仍保持 `allowWireless = false`，未改动）：
+
+- 入口：`PickerBackend.Refresh` 调 `Inventory(deep, allowWireless: true)`；`MainViewModel` 的 10 秒定时刷新同样走这里。
+- **mDNS（每轮）**：`EnsureWireless` 执行 `adb mdns services`，`ParseMdnsServices` 只收
+  `_adb-tls-connect._tcp` 行（配对服务连上去没意义），从实例名 `adb-<serial>-<hash>` 里提取串号提示写进缓存。
+  对尚未在线的端点执行 `adb connect`，成功与否都以 `adb devices` 的 `device` 状态为准确认；
+  失败会 `adb disconnect` 掉并在 30 秒内退避，避免 10 秒刷新被一个坏端点拖住。
+  `WirelessAlreadyLive` 会在「端点已在线 / 同名 mDNS 传输已在线 / 同串号 USB 已在线」时跳过重复连接。
+- **子网 5555（仅深度刷新）**：`LocalSubnetPrefix` 选一条有 IPv4 网关的物理网卡（跳过回环/APIPA/隧道），
+  `ScanTcpPort` 按 64 台一批、每批 400ms 并发探测（/24 约 1.6 秒），命中后同样 `adb connect` + 验状态。
+  受 `settings.scanSubnet`（默认 `true`）控制；跨网段/NAT 找不到是预期行为。
+- **断开无线会话**：`RunAction("disconnect")` 对该行实际的 `Tls` / `Tcp5555` 端点逐个 `disconnect`，
+  并 `SuppressWireless` 10 分钟；不能用 `Preferred` 代替（USB 优先时它可能是 USB 串号）。
+- 单测只覆盖纯解析（`WirelessDiscoveryTests` 四条：真实广播行、忽略配对/其他服务、去重与坏行、完整服务名/空输出）；
+  真实 mDNS→connect→`device` 的链路靠 `--selftest` 与真机验证。
 
 ### 投屏目标必须是 adb 的「传输名」，不是设备串号
 
@@ -242,6 +267,32 @@ scrcpy 从"进程起来"到"窗口出现"还要 1~3 秒（推 scrcpy-server 到�
 
 ---
 
+## Windows 文件互传实现要点（1.1.0）
+
+移植自 macOS 的 `TransferManager` / `TransferViewModel`，规则相同、线程模型换成 WPF 的 Dispatcher：
+
+- **服务层可无头单测**：`TransferManager` 不依赖 WPF，受理五重判定全部在一把锁内完成
+  （adb 已解析 → 行在线 → 每设备互斥 → 全局计数 < 3 → 登记），拒绝式返回、不排队。
+  `_rows()` 读的是 `PickerBackend.SnapshotRows()`，与界面看到的是同一份行快照。
+- **目标严格 live-only**：`TransferTargets.ChooseLive` 只接受 `adb devices` 当前状态为 `device` 的候选，
+  一个都没有就返回 null；这里**不能**复用投屏的 `ResolveTarget` 兜底逻辑，否则设备掉线会被错报成别的失败。
+- **进度必须实测**：adb 的输出被管道接走时不会打印 `[%]`，所以推送看设备端（文件 `stat -c %s`、
+  文件夹 `du -sk`），拉取看本机落地目录递归大小。测不到总字节就不启动轮询，卡片显示「传输中…」；
+  轮询本身失败只影响那一拍，不能打断传输。
+- **回调线程**：`TransferManager.ProgressChanged / FinalChanged` 在后台线程触发，`TransferCenter`
+  统一 `Dispatcher.BeginInvoke` 回 UI 线程；关窗后 Dispatcher 已停，迟到的回调直接丢弃。
+- **取消/清理**：`Cancel` 只置标志并杀本次 adb 进程，执行器在进程退出后删设备端半包（推送）
+  或本次新建的落地目录（拉取）；关主窗口走 `CancelAll`，不留孤儿。
+- **行内状态优先级**：`DeviceItem.StateText` = 启动中… > 传输中 > 离线 / 在线；
+  列表每 10 秒整体重建，所以「传输中」也必须像 `_casting` 一样由集合按 Key 贴回。
+- **右键菜单与冒烟脚本的契约**：传输两项直接构造 `MenuItem`，没有写成 `Add(menu, "...")`，
+  这样 `smoke-ui.ps1` 的「离线菜单恰好三项」断言仍然成立；离线行本来就不进 `if (!item.IsOffline)` 分支。
+- **文件选择框的差异**：WPF 的 `OpenFileDialog` 只能混选文件，文件夹推送走拖放
+  （macOS 的 NSOpenPanel 可以两者混选）。下载目录读 Windows known folder，OneDrive 重定向也认，
+  `SCRCPY_DOWNLOAD_DIR` 仅用于测试覆盖。
+
+---
+
 ## Swift 实现与打包踩坑
 
 - `swiftc` 多文件编译时，top-level 语句（`let app = NSApplication.shared` 之类）**只允许出现在 `main.swift`**，
@@ -262,12 +313,18 @@ scrcpy 从"进程起来"到"窗口出现"还要 1~3 秒（推 scrcpy-server 到�
 - 设备发现只覆盖**本机所在的那个 /24**，跨网段或隔 VLAN 就找不到（这是有意的，避免全网广播式扫描）。
 - 未做：给老设备自动执行 `adb tcpip 5555` 的开机脚本方案；投屏窗口的画质/码率仍是命令行里写死的
   `-m 1280 -b 4M --max-fps=60`，没做成界面可调。
-- **Windows C#/WPF 版目前只做到这些程度的自动化验证**（2026-10-11）：96 个服务层/几何单测、`--selftest` 无头冒烟、
+- **Windows C#/WPF 版目前只做到这些程度的自动化验证**（2026-10-22）：124 个服务层/几何单测、`--selftest` 无头冒烟、
   `smoke-ui.ps1` 的四个 UI Automation 场景（工具齐全 / 缺工具 / 离线缓存行 / 真机右键菜单 + 双击真的拉起 scrcpy；
   真机场景里还查导航条：八颗按钮都在、条宽 = 窗口宽、下沿缝 1px、挪窗口后仍贴住、息屏/唤醒真的改了
   `dumpsys power` 的 `mWakefulness`、投屏进程死了条子跟着消失）。
-  **没有覆盖**：无线调试（mDNS + TLS 端口）的真机链路、断开无线会话、设置备注名的输入框、**音量± 两颗键的效果**
-  （设备侧没有好观测的读数，只验到按钮在、点得动）、深度刷新的子网扫描命中、Mica 视觉与托盘缺失下的观感。
+  **没有覆盖**：深度刷新的子网 5555 命中（台架上的设备都走 mDNS/TLS，没有开 5555 的机器）、设置备注名的输入框、**音量± 两颗键的效果**
+  （设备侧没有好观测的读数，只验到按钮在、点得动）、Mica 视觉与托盘缺失下的观感。
+  无线链路已验到真机：`--selftest` 在手动 `adb disconnect` 后自动重连并落成「无线调试」行；
+  `smoke-ui.ps1` 的 Healthy 场景从空缓存发现该行、状态栏为「无线/扫描：开启」，Device 场景用这条无线通道
+  拉起 scrcpy 并验导航条。「断开无线会话」的 10 分钟抑制另用一次性 UI Automation 脚本验过：
+  点完端点消失，等过一轮 10 秒自动刷新也没有被拉回来（脚本未入库）。
+  文件互传只覆盖了纯逻辑（候选通道、失败映射、落地命名、字节测量、受理拒绝分支）；
+  **真机推送/拉取、拖放、取消与半包清理没有自动化覆盖**，需要台架上手验。
   前几项要么需要在手机上点配对界面（由人来做），要么只有代码级/单测级保证。
 - 导航条的**鼠标手势**没有自动化覆盖：真鼠标点击、按住拖动脱离吸附、双击重新吸附——冒烟里是用
   `InvokePattern.Invoke()` 按 AutomationId 触发按钮（等价于按下，但不走鼠标路径），跟随是用 `MoveWindow`

@@ -8,6 +8,9 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>ScrcpyPicker</RootNamespace>
     <AssemblyName>ScrcpyPicker</AssemblyName>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
     <ApplicationIcon>Assets\picker.ico</ApplicationIcon>
     <!-- self-contained 单文件发布用；win-x64 与 Dist\tools 的位数一致 -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

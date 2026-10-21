@@ -1,7 +1,23 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using ScrcpyPicker.Models;
 
 namespace ScrcpyPicker.Services;
+
+/// <summary>
+/// 一条 mDNS 广播（adb mdns services 的输出行）。
+/// Name 是服务实例名（adb-&lt;串号&gt;-&lt;hash&gt;），TransportName 补上服务类型后缀后
+/// 与 adb devices 里列出的传输名一致。
+/// </summary>
+public sealed record MdnsService(string Name, string Endpoint, string SerialHint)
+{
+    public const string ServiceType = "_adb-tls-connect._tcp";
+
+    public string TransportName =>
+        Name.EndsWith(ServiceType, StringComparison.Ordinal) ? Name : Name + "." + ServiceType;
+}
 
 /// <summary>
 /// 设备发现核心（移植自 Go 版 internal/discovery，源头是 shared/Discover.ps1）。
@@ -20,6 +36,7 @@ public sealed class DiscoveryService
     private static readonly Regex ProductRe = new(@"product:(\S+)", Rx());
     private static readonly Regex TlsNameRe = new(@"_adb-tls-connect\._tcp$", Rx());
     private static readonly Regex IpPortRe = new(@"^(\d+\.\d+\.\d+\.\d+):(\d+)$", Rx());
+    private static readonly Regex MdnsSerialRe = new(@"^adb-(.+)-[A-Za-z0-9]{5,}$", Rx());
     private static readonly Regex SectionRe = new(@"^MK_S(\d)$", Rx());
     private static readonly Regex LevelRe = new(@"^\s*level:\s*(\d+)", Rx());
     private static readonly Regex StatusRe = new(@"^\s*status:\s*(\d+)", Rx());
@@ -41,6 +58,13 @@ public sealed class DiscoveryService
     /// 去读缓存，于是备注名被空值覆盖、getprop 每 10 秒重跑一次。
     /// </summary>
     private readonly Dictionary<string, string> _knownSerial = new();
+
+    /// <summary>
+    /// 连不上的无线端点退避 30 秒：mDNS 广播和手写的 5555 地址都可能指向已经换了端口
+    /// 或已经关机的端点，每 10 秒刷新都去等一次 adb connect 的超时会拖慢整个列表。
+    /// </summary>
+    private readonly Dictionary<string, DateTimeOffset> _connectBackoff = new(StringComparer.Ordinal);
+    private static readonly TimeSpan ConnectBackoffTime = TimeSpan.FromSeconds(30);
 
     public DiscoveryService(ToolchainHolder tools, ConfigService cfg)
     {
@@ -120,6 +144,287 @@ public sealed class DiscoveryService
             map[fields[0]] = fields[1];
         }
         return map;
+    }
+
+    // ---- 无线发现（mDNS + 子网 5555） ----
+
+    /// <summary>
+    /// 纯解析：adb mdns services 的输出 → 可连接的无线调试端点。
+    /// 只认 _adb-tls-connect._tcp；_adb-tls-pairing._tcp 是配对窗口，连上去没有意义。
+    /// </summary>
+    public static List<MdnsService> ParseMdnsServices(string[] lines)
+    {
+        var result = new List<MdnsService>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string raw in lines)
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 ||
+                !line.Contains(MdnsService.ServiceType, StringComparison.Ordinal)) continue;
+
+            string[] cols = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (cols.Length < 3) continue;
+
+            string name = cols[0];
+            string endpoint = cols[^1];
+            if (!IpPortRe.IsMatch(endpoint)) continue;
+            if (!seen.Add(endpoint)) continue;   // 同一端点重复广播只连一次
+
+            string instance = name.EndsWith(MdnsService.ServiceType, StringComparison.Ordinal)
+                ? name[..^MdnsService.ServiceType.Length].TrimEnd('.')
+                : name;
+            string hint = string.Empty;
+            var m = MdnsSerialRe.Match(instance);
+            if (m.Success) hint = m.Groups[1].Value;
+
+            result.Add(new MdnsService(instance, endpoint, hint));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 主动把无线设备接进 adb：每次刷新读一遍 mDNS 广播，深度刷新再扫本机 /24 的 5555。
+    /// 只在已经配对/授权过的电脑上有效（配对码不在本工具的职责里）。
+    /// </summary>
+    private void EnsureWireless(ToolchainSnapshot tc, PickerConfig cfg, bool deep)
+    {
+        if (!tc.AdbResolved) return;
+
+        List<MdnsService> services =
+            ParseMdnsServices(ToolchainService.Adb(tc, new[] { "mdns", "services" }));
+        if (services.Count > 0)
+        {
+            List<Transport> transports = UsbTransports();
+            Dictionary<string, string> live = LiveTransports();
+
+            foreach (MdnsService svc in services)
+            {
+                // mDNS 服务名本身就带着串号提示：先记下，省掉一次“按临时 Key 建行再迁移”。
+                if (svc.SerialHint.Length > 0)
+                {
+                    Remember(svc.TransportName, svc.SerialHint);
+                    Remember(svc.Endpoint, svc.SerialHint);
+                }
+
+                if (WirelessAlreadyLive(svc, transports, live)) continue;
+                if (InConnectBackoff(svc.Endpoint)) continue;
+
+                if (TryConnect(tc, svc.Endpoint))
+                {
+                    ClearConnectBackoff(svc.Endpoint);
+                    ClearDeadTransportsFor(tc, IpOf(svc.Endpoint), svc.Endpoint);
+                }
+                else
+                {
+                    MarkConnectBackoff(svc.Endpoint);
+                    // connect 失败也会在 adb 里留下 offline 条目，顺手清掉。
+                    ToolchainService.Adb(tc, new[] { "disconnect", svc.Endpoint });
+                }
+            }
+        }
+
+        if (!deep || !cfg.Settings.ScanSubnet) return;
+
+        string? prefix = LocalSubnetPrefix(out string ownIp);
+        if (prefix is null) return;
+
+        foreach (string ip in ScanTcpPort(prefix, 5555, ownIp))
+        {
+            string endpoint = ip + ":5555";
+            if (InConnectBackoff(endpoint)) continue;
+            Dictionary<string, string> live = LiveTransports();
+            if (live.TryGetValue(endpoint, out string? state) && state == "device") continue;
+
+            if (TryConnect(tc, endpoint))
+            {
+                ClearConnectBackoff(endpoint);
+                ClearDeadTransportsFor(tc, ip, endpoint);
+            }
+            else
+            {
+                MarkConnectBackoff(endpoint);
+                ToolchainService.Adb(tc, new[] { "disconnect", endpoint });
+            }
+        }
+    }
+
+    /// <summary>该 mDNS 端点是否已经通过某个传输在线（同串号的 USB 也算，不必再开无线）。</summary>
+    private bool WirelessAlreadyLive(
+        MdnsService svc, List<Transport> transports, Dictionary<string, string> live)
+    {
+        if (live.TryGetValue(svc.Endpoint, out string? endpointState) && endpointState == "device")
+            return true;
+        if (live.TryGetValue(svc.TransportName, out string? mdnsState) && mdnsState == "device")
+            return true;
+        if (svc.SerialHint.Length == 0) return false;
+
+        foreach (Transport t in transports)
+        {
+            if (SerialOf(t.Serial) != svc.SerialHint) continue;
+            if (live.TryGetValue(t.Serial, out string? state) && state == "device") return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// adb connect 返回 "connected" 不代表通道可用：没完成握手的端口会以 offline 挂在
+    /// adb devices 里。只有状态真的是 device 才算连上。
+    /// </summary>
+    private static bool TryConnect(ToolchainSnapshot tc, string endpoint)
+    {
+        ProcessRunner.Run(tc.AdbPath, new[] { "connect", endpoint }, 6000);
+        Dictionary<string, string> live =
+            ParseDeviceStates(ToolchainService.Adb(tc, new[] { "devices" }));
+        return live.TryGetValue(endpoint, out string? state) && state == "device";
+    }
+
+    /// <summary>
+    /// 手机换端口后，旧端点会以 offline 永久留在 adb devices 里。
+    /// 只清理同一 IP 下的 offline 条目，不碰别的设备。
+    /// </summary>
+    private void ClearDeadTransportsFor(ToolchainSnapshot tc, string ip, string keepEndpoint)
+    {
+        if (ip.Length == 0) return;
+        string prefix = ip + ":";
+        Dictionary<string, string> live = LiveTransports();
+        foreach (Transport t in UsbTransports())
+        {
+            if (t.Serial == keepEndpoint) continue;
+            if (!t.Serial.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            if (live.TryGetValue(t.Serial, out string? state) && state == "offline")
+                ToolchainService.Adb(tc, new[] { "disconnect", t.Serial });
+        }
+    }
+
+    private static string IpOf(string endpoint)
+    {
+        int colon = endpoint.LastIndexOf(':');
+        return colon > 0 ? endpoint[..colon] : string.Empty;
+    }
+
+    private bool InConnectBackoff(string endpoint)
+    {
+        lock (_gate)
+        {
+            return _connectBackoff.TryGetValue(endpoint, out DateTimeOffset until) &&
+                   until > DateTimeOffset.UtcNow;
+        }
+    }
+
+    private void MarkConnectBackoff(string endpoint)
+    {
+        lock (_gate) _connectBackoff[endpoint] = DateTimeOffset.UtcNow + ConnectBackoffTime;
+    }
+
+    private void ClearConnectBackoff(string endpoint)
+    {
+        lock (_gate) _connectBackoff.Remove(endpoint);
+    }
+
+    /// <summary>
+    /// 用户主动断开无线会话后，这段时间内不要再被 mDNS 自动接回来，
+    /// 否则右键「断开无线会话」会在下一轮 10 秒刷新里看起来毫无效果。
+    /// </summary>
+    public void SuppressWireless(string endpoint, TimeSpan duration)
+    {
+        if (endpoint.Length == 0) return;
+        lock (_gate) _connectBackoff[endpoint] = DateTimeOffset.UtcNow + duration;
+    }
+
+    /// <summary>
+    /// 取本机用于发现设备的 /24：优先有默认网关的物理网卡（以太网/无线），
+    /// 跳过回环、APIPA 与隧道。取不到返回 null，调用方就不扫描。
+    /// </summary>
+    public static string? LocalSubnetPrefix(out string ownIp)
+    {
+        ownIp = string.Empty;
+        try
+        {
+            var candidates = new List<(int Rank, string Ip)>();
+            foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != OperationalStatus.Up) continue;
+                if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback
+                    or NetworkInterfaceType.Tunnel) continue;
+
+                IPInterfaceProperties props = nic.GetIPProperties();
+                bool hasGateway = props.GatewayAddresses.Any(g =>
+                    g.Address.AddressFamily == AddressFamily.InterNetwork &&
+                    !g.Address.Equals(IPAddress.Any));
+                bool physical = nic.NetworkInterfaceType is NetworkInterfaceType.Ethernet
+                    or NetworkInterfaceType.Wireless80211;
+                int rank = hasGateway ? (physical ? 0 : 1) : (physical ? 2 : 3);
+
+                foreach (UnicastIPAddressInformation ua in props.UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    string ip = ua.Address.ToString();
+                    if (ip.StartsWith("127.", StringComparison.Ordinal) ||
+                        ip.StartsWith("169.254.", StringComparison.Ordinal) ||
+                        ip.StartsWith("0.", StringComparison.Ordinal)) continue;
+                    candidates.Add((rank, ip));
+                }
+            }
+
+            var best = candidates.OrderBy(c => c.Rank).FirstOrDefault();
+            if (best.Ip is null) return null;
+            string[] parts = best.Ip.Split('.');
+            if (parts.Length != 4) return null;
+            ownIp = best.Ip;
+            return string.Join(".", parts.Take(3));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 扫 /24 的固定端口：按批发起异步 TCP 连接，每批最多等 timeoutMs。
+    /// 默认 64 个一批、400ms 一批，整段 254 个地址约 1.6 秒（只在深度刷新里跑）。
+    /// </summary>
+    public static List<string> ScanTcpPort(
+        string prefix, int port, string skipIp, int timeoutMs = 400, int batchSize = 64)
+    {
+        var found = new List<string>();
+        for (int start = 1; start <= 254; start += batchSize)
+        {
+            int end = Math.Min(start + batchSize - 1, 254);
+            var tries = new List<(string Ip, TcpClient Client, Task Task)>();
+            for (int host = start; host <= end; host++)
+            {
+                string ip = prefix + "." + host;
+                if (ip == skipIp) continue;
+                var client = new TcpClient();
+                try
+                {
+                    tries.Add((ip, client, client.ConnectAsync(ip, port)));
+                }
+                catch
+                {
+                    client.Dispose();
+                }
+            }
+
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline && tries.Any(t => !t.Task.IsCompleted))
+                Thread.Sleep(20);
+
+            foreach ((string ip, TcpClient client, Task task) in tries)
+            {
+                try
+                {
+                    if (task.Status == TaskStatus.RanToCompletion && client.Connected)
+                        found.Add(ip);
+                }
+                catch
+                {
+                    // 连不上就是没开 5555，继续扫下一个
+                }
+                client.Dispose();
+            }
+        }
+        return found;
     }
 
     /// <summary>
@@ -252,12 +557,15 @@ public sealed class DiscoveryService
 
     /// <summary>
     /// 合并在线设备清单。deep=false 时优先用 1 分钟内的详情缓存；
-    /// allowWireless 目前不进 adb 调用，只是保留与 Go 版一致的签名（无线通道由 adb 的 mDNS 自己发现）。
+    /// allowWireless=true 时先主动发现无线调试端点（每次 mDNS，深度再扫 /24 的 5555），
+    /// 再读取 adb devices —— 否则 mDNS 广播里的手机永远只停留在"广播"层，不会出现在列表里。
     /// </summary>
     public List<DeviceRow> Inventory(bool deep, bool allowWireless)
     {
         PickerConfig cfg = _cfg.Snapshot();
         bool preferUsb = cfg.Settings.PreferUsb;
+
+        if (allowWireless) EnsureWireless(Tc(), cfg, deep);
 
         var rows = new Dictionary<string, DeviceRow>();
 

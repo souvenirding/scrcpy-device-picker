@@ -4,23 +4,26 @@
 不再跑「Go 单 exe + 内嵌 HTTP 服务 + WebView2 网页」那一套：没有本地端口、没有浏览器内核依赖，
 表格、按钮、右键菜单都是真控件。旧的 Go 实现（`packaging/windows/go/`）已整体删除。
 
-macOS 端仍是 Swift + WKWebView + 内嵌 HTTP 服务，**没有改动**；两端各自独立，
-共用的只有 `shared/devices.example.json` 描述的配置格式（`%APPDATA%\ScrcpyPicker\devices.json`
+macOS 端是 Swift + SwiftUI 原生界面 + 进程内服务（没有 WebView / 本地端口），**没有改动**；
+两端各自独立，共用的只有 `shared/devices.example.json` 描述的配置格式（`%APPDATA%\ScrcpyPicker\devices.json`
 与 macOS 的 `~/Library/Application Support/ScrcpyPicker/devices.json` 字段完全一致，互相能读）。
 
 ## 架构
 
 ```
 ScrcpyPicker.exe  (.NET 8 self-contained 单文件)
-├─ Views/MainWindow.xaml        FluentWindow：标题栏 + 工具条 + 横幅 + 工具目录卡片 + DataGrid + 底部状态
+├─ Views/MainWindow.xaml        FluentWindow：标题栏 + 工具条 + 横幅 + 工具目录卡片 + DataGrid + 传输卡片/toast
 ├─ Views/NavBarWindow.xaml      无边框自绘导航条：吸附跟随投屏窗口下沿，七颗按键 + ✕
 ├─ ViewModels/                  MainViewModel（命令、10 秒定时刷新、toast、导航条开关）/ DeviceItem（行视图模型）
+│                               TransferCenter（传输卡片堆叠与行状态）/ TransferCardItem（单张卡片）
 └─ Services/
     ├─ ToolchainService.cs      adb / scrcpy 定位：候选顺序 + 受限深度自动搜索 + 版本探测
     ├─ ConfigService.cs         devices.json 读写（原子替换、损坏自愈）
     ├─ DiscoveryService.cs      三通道发现（USB / mDNS 无线调试 TLS / TCP 5555）+ getprop 详情
     ├─ WebRows.cs               在线行 + 缓存离线行 → 界面行（在线优先、按名称排序）
     ├─ CastManager.cs           scrcpy 启动 / 复用 / 孤儿认领 / 日志判就绪
+    ├─ TransferManager.cs       文件互传：受理互斥、live-only 目标、字节实测进度、取消清理
+    ├─ TransferPaths.cs         本机「下载」目录（known folder，支持 SCRCPY_DOWNLOAD_DIR 覆盖）
     ├─ NavBarService.cs         每台投屏一条导航条 + 60ms 跟随循环（含按 PID 判活清理）
     ├─ NavBarLayout.cs          导航条的纯几何：物理像素→DIP、下沿/上沿/内叠、圆角朝向（可单测）
     ├─ User32.cs                GetWindowRect / IsIconic / IsWindow
@@ -35,15 +38,17 @@ ScrcpyPicker.exe  (.NET 8 self-contained 单文件)
 
 | 位置 | 内容 |
 |---|---|
-| 工具条 | **刷新**、**深度刷新**（多花几秒做子网 5555 扫描与 mDNS 重发现）、**USB 优先**、**导航条**（总开关） |
-| 工具条右侧 | 一行状态：adb.exe / scrcpy.exe 各自的来源与版本，以及无线调试的提示文案 |
+| 工具条 | **刷新**（每次都会做 mDNS 无线发现）、**深度刷新**（再多花几秒扫本机 /24 的 5555 端口）、**USB 优先**、**导航条**（总开关） |
+| 工具条右侧 | 一行状态：adb.exe / scrcpy.exe 各自的来源与版本，以及「无线/扫描：开启/关闭」（adb 可用即开启） |
 | 顶部横幅 | 只在 adb / scrcpy 没解析出来时出现，说清楚缺什么、怎么办（Windows 文案，不会出现 `brew`） |
 | 工具目录卡片 | 同上，只在缺工具时出现：填目录「保存并应用」、「自动搜索」、「清除记住的目录」 |
-| 设备表 | 设备 / 型号 / 系统 / 连接 / 地址 / 电量 / 状态 七列；离线行置灰并排在在线设备之后 |
+| 设备表 | 设备 / 型号 / 系统 / 连接 / 地址 / 电量 / 状态 七列；离线行置灰并排在在线设备之后；投屏中淡蓝底，拖放悬停更亮一层 |
+| 右下角卡片 | 文件传输卡片叠在 toast 上方：进行中置顶、最多三张，其余折成「+N 个传输中」；进度按实测字节走，可点「取消」 |
 | 右下角 toast | 投屏进度与结果：转圈 → ✓「投屏窗口已打开」或 ✕ 带 scrcpy 原话，点一下关闭 |
 | 底部 | 「共 N 台 · 上次刷新 HH:mm:ss」 |
 | **双击一行** | 投屏（自动选通道：USB → 无线调试 → 5555；同设备重复双击复用已开窗口） |
-| **右键一行** | 投屏（自动选通道）/ 用 USB 投屏 / 投屏（不同步剪贴板）/ 强制重新投屏 / 唤醒屏幕 / 返回 / 桌面 / 多任务 / 断开无线会话 / 设置备注名… / 复制地址 / 从列表移除 |
+| **拖文件/文件夹到一行** | 推送到该设备 `/sdcard/Download`；仅在线行接收，离线行不会亮起 |
+| **右键一行** | 投屏（自动选通道）/ 用 USB 投屏 / 投屏（不同步剪贴板）/ 强制重新投屏 / 唤醒屏幕 / 返回 / 桌面 / 多任务 / 断开无线会话 / 推送文件到设备… / 从设备拉取文件（Download / DCIM / Pictures）/ 设置备注名… / 复制地址 / 从列表移除 |
 | **导航条**（投屏时出现） | 吸附在**投屏窗口下沿**、与窗口同宽的一条按键条：返回 / 桌面 / 多任务 / 音量- / 音量+ / 息屏 / 唤醒 + ✕。跟随窗口拖动、缩放、最大化（放不下会翻到窗口上沿，最大化时叠在画面底部内侧），窗口最小化它跟着藏、还原自己回来；按住空白拖一下脱离吸附变悬浮条，**双击**恢复吸附。每台投屏各有一条，投屏窗口关掉它自己收掉；总开关在工具条「导航条」上 |
 
 离线行只保留「设置备注名… / 复制地址 / 从列表移除」三项——投屏要有通道，断开无线会话要有 TLS 端口。
@@ -51,6 +56,42 @@ ScrcpyPicker.exe  (.NET 8 self-contained 单文件)
 > 与 macOS 版的界面差异：两端的导航条都在，形态不同——macOS 是屏幕底部居中的**独立浮动 HUD**（不做窗口吸附，
 > 那要 Accessibility 权限），Windows 是**吸附跟随投屏窗口**的那一条；按键都是 `adb shell input keyevent`。
 > Windows 关掉主窗口就是退出（没有系统托盘常驻），已经开着的 scrcpy 窗口不受影响。
+
+## 无线发现（1.1.0）
+
+Windows 版每次刷新（含 10 秒自动刷新）都会**主动找无线设备**，不用先手动 `adb connect`：
+
+- **mDNS（每次刷新）**：`adb mdns services` 里只取 `_adb-tls-connect._tcp`（配对服务 `_adb-tls-pairing._tcp`
+  不碰）；对还没连上的端点执行 `adb connect`，再以 `adb devices` 的 `device` 状态为准确认真的可用。
+  已在线（USB / TLS 同一串号）的设备不重复连。
+- **子网 5555（仅深度刷新）**：扫本机所在 /24 的 `5555` 端口，命中后同样 `adb connect` 并验状态；
+  受 `settings.scanSubnet`（默认 `true`）控制。跨网段/隔 NAT 扫不到是预期行为。
+- **失败退避**：连不上或连上仍是 `offline` 的端点在 30 秒内不再重试，避免每轮刷新都被拖住；
+  失败时顺手 `adb disconnect` 掉僵尸端点。
+- **断开不会立刻被拉回来**：右键「断开无线会话」会断开该行实际的 TLS 与 5555 端点，并在 10 分钟内
+  抑制自动重连；USB 通道不受影响。
+
+> macOS 版不做这套主动扫描（`allowWireless = false`，只列 USB 与已经由 adb 连上的设备）；
+> 本文的扫描行为仅指 Windows。
+
+## 文件互传（1.1.0）
+
+规则与 macOS 版逐条对齐（`Services/TransferManager.cs` + `Models/TransferModels.cs`）：
+
+- **推送**：拖文件/文件夹到在线行，或右键「推送文件到设备…」多选文件；统一落到设备
+  `/sdcard/Download/<原名>`，文件夹按顶层项逐个推送（批量时卡片显示「第 i/N 个」）。
+- **拉取**：右键「从设备拉取文件」→ `Download / DCIM / Pictures` 三项之一，落到本机「下载」文件夹下的
+  同名目录；重名自动变成 `DCIM 2`、`DCIM 3`…（并发拉取同名目录也会互相避开）。
+- **并发**：每台设备同一时刻只跑一个传输；全局最多 3 个。被拒时右下角给一张 3 秒提示卡，不排队。
+- **目标严格现算**：只认 `adb devices` 此刻状态为 `device` 的候选，不退回缓存地址——
+  设备不可达就明确报「设备当前不可达」，不会把文件推到别的通道上。
+- **进度是实测的**：adb 被重定向输出时不会给 `[%]`，所以推送轮询设备端 `stat`（文件）/ `du`（文件夹），
+  拉取轮询本机落地目录；测不到总量时卡片保持「传输中…」，不假装百分比。
+- **取消与清理**：点卡片「取消」会杀掉本次 adb 进程；推送删掉设备端半包，拉取删掉本次新建的落地目录，
+  不碰用户已有文件。关主窗口时全部终止，不留孤儿进程。
+
+> Windows 的文件选择框只能混选文件；要推文件夹请直接拖到设备行（macOS 的 NSOpenPanel 两者都能选）。
+> 本机下载目录取 Windows 的 known folder（OneDrive 重定向也认），可用 `SCRCPY_DOWNLOAD_DIR` 覆盖。
 
 ## 分发形态
 
@@ -145,7 +186,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -NoZip   # 只出 exe，不�
 ```
 dotnet\ScrcpyPicker.sln
       \src\ScrcpyPicker\          WPF 主工程（Views / ViewModels / Services）
-      \tests\ScrcpyPicker.Tests\  xUnit 单测 96 个（工具链解析 / 发现结果 / 配置读写 / 投屏参数 / 导航条几何与开关）
+      \tests\ScrcpyPicker.Tests\  xUnit 单测 124 个（工具链解析 / 发现结果 / 无线 mDNS 解析 / 配置读写 / 投屏参数 / 导航条几何与开关 / 文件互传）
       \tools\                     构建期与验证期脚本（见下）
 ```
 
@@ -191,6 +232,8 @@ remembered 地址和精简后的右键菜单）、`Device`（台架上有真机�
 - `SCRCPY_TOOL_DIR`：强制指定 adb/scrcpy 所在目录。
 - `SCRCPY_CONFIG_DIR`：强制指定配置目录（默认 `%APPDATA%\ScrcpyPicker`）——单测和冒烟就靠它隔离，
   跑一次测试不会碰你真正的 `devices.json`。
+- `SCRCPY_DOWNLOAD_DIR`：覆盖拉取落地的「下载」目录（默认读 Windows known folder；
+  测试与排障用，正常情况下不用设）。
 
 ## 与旧版的关系
 

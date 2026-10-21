@@ -71,7 +71,7 @@
 | 键 | 缺省 | 作用 |
 |---|---|---|
 | `preferUsb` | `true` | 组装设备行时把 USB 通道排在前面（两端都读；界面工具条的「USB 优先」写这里） |
-| `scanSubnet` | `true` | **遗留键，两端都只解析、没有代码消费它**：macOS 的 mDNS 与子网扫描实际由 `DeviceService.swift` 里写死的 `allowWireless = false` 把关，Windows 的深度刷新不看这个值 |
+| `scanSubnet` | `true` | **仅 Windows 深度刷新消费**：是否顺手扫本机所在 /24 的 5555 端口。mDNS 无线发现不受它控制，每次刷新都会做。macOS 版不主动扫描（`allowWireless = false`），只解析、不消费这个键 |
 | `navBar` | `true` | **仅 Windows**：投屏时是否挂吸附跟随的导航条（界面工具条上的「导航条」开关写这里）。老文件里没这个键按 `true` 处理 |
 
 `settings.toolDir`（仅 Windows）记自动搜索/手工填到的工具目录，与上面几项同层。
@@ -149,11 +149,14 @@ app 无本地 HTTP 服务，界面与后端在同一个进程内直调（MVVM：
 **投屏目标由服务层按设备 Key 重新计算**，绝不信任界面传来的地址串；窗口不可见（最小化/被遮挡）时
 服务层自动暂停刷新，恢复可见立即补一轮。
 
-### 默认只发现 USB
+### 默认只发现 USB（仅 macOS）
 
 macOS app 当前**默认只自动发现 USB 设备**：mDNS 无线调试与子网 5555 扫描的代码已就位，但 `DeviceService.swift`
 里 `allowWireless` 默认为 `false`，界面上的「无线/扫描」标识显示为关闭状态。如需开启，需自行构建时把该参数
 改为 `true`，再按 [配对与排错](pairing-and-troubleshooting.md) 配对。
+
+> Windows 版相反：从 1.1.0 起每次刷新都会主动做 mDNS 发现，深度刷新再加 /24 的 5555 扫描，
+> 不需要改参数；`scanSubnet` 只控制深度刷新里的 5555 这一半。
 
 > macOS 的「本地网络」隐私权限会拦截 mDNS 广播与局域网扫描：首次触发时系统会弹窗询问，
 > 若误拒，需到「系统设置 → 隐私与安全性 → 本地网络」手动放行 `ScrcpyPicker`，

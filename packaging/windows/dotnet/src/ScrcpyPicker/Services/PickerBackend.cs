@@ -22,7 +22,7 @@ public sealed record StatusInfo
     public string Error { get; init; } = string.Empty;
     public string LastRefresh { get; init; } = string.Empty;
 
-    /// <summary>无线/扫描开关的展示位（保留与旧界面一致的语义：默认关，避免共享网络误连陌生设备）。</summary>
+    /// <summary>无线扫描的展示位：adb 可用即为开（每轮 mDNS、深度刷新加 /24 5555）。</summary>
     public bool Wireless { get; init; }
 }
 
@@ -86,6 +86,9 @@ public sealed class PickerBackend
     /// <summary>自动搜索的时间上限，与 Go 版 scanBudget 一致。</summary>
     public static readonly TimeSpan ScanBudget = TimeSpan.FromSeconds(10);
 
+    /// <summary>用户主动断开无线会话后的静默期，防止 mDNS 扫描下一轮又把它接回来。</summary>
+    private static readonly TimeSpan WirelessDisconnectCooldown = TimeSpan.FromMinutes(10);
+
     /// <summary>adb 拒绝注入按键时的特征（MIUI/HyperOS 未开"USB 调试（安全设置）"）。</summary>
     private static readonly Regex InjectBlockedRe =
         new("INJECT_EVENTS|SecurityException", RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -105,6 +108,9 @@ public sealed class PickerBackend
     public ConfigService Config { get; }
     public DiscoveryService Discovery { get; }
     public CastManager Casts { get; }
+
+    /// <summary>文件互传（与 macOS 1.1.0 同一套契约；受理时读本后端的行快照）。</summary>
+    public TransferManager Transfers { get; }
 
     public PickerBackend(string exeDir, string envDir, bool allowScan)
     {
@@ -126,6 +132,8 @@ public sealed class PickerBackend
 
         Discovery = new DiscoveryService(Tools, Config);
         Casts = new CastManager(Tools);
+        // SnapshotRows 返回的是本后端已加锁拷贝的行，传输受理与界面看到的是同一份事实。
+        Transfers = new TransferManager(Tools, Discovery, SnapshotRows);
     }
 
     private ResolveOptions BuildOptions(bool allowScan) => new()
@@ -153,7 +161,7 @@ public sealed class PickerBackend
     {
         try
         {
-            List<DeviceRow> inv = Discovery.Inventory(deep, false);
+            List<DeviceRow> inv = Discovery.Inventory(deep, allowWireless: true);
             List<WebRow> built = WebRows.Build(inv, Config);
             lock (_gate)
             {
@@ -205,7 +213,9 @@ public sealed class PickerBackend
             AdbHint = missing ? ToolchainService.MissingHint : string.Empty,
             Error = errTxt,
             LastRefresh = refreshed,
-            Wireless = false,
+            // Windows 默认开启无线扫描：每次刷新读 mDNS，深度刷新再扫 /24 的 5555。
+            // adb 都找不到时扫描无从谈起，状态行如实显示关闭。
+            Wireless = t.AdbResolved,
         };
     }
 
@@ -403,8 +413,19 @@ public sealed class PickerBackend
                 var row = SnapshotRows().FirstOrDefault(r => r.Key == key);
                 if (row is not null)
                 {
-                    string t = Discovery.ResolveTarget(key, row.Preferred, row.UsbSerial, row.Tls, row.Tcp5555);
-                    if (t.Length > 0) Discovery.Disconnect(t);
+                    // 「断开无线会话」只针对无线端点；不能拿 Preferred 去猜 —— USB 优先时
+                    // Preferred 是 USB 串号，Disconnect 会因不含冒号而静默不动。
+                    var endpoints = new List<string>();
+                    if (row.Tls.Contains(':')) endpoints.Add(row.Tls);
+                    if (row.Tcp5555.Contains(':') && !endpoints.Contains(row.Tcp5555))
+                        endpoints.Add(row.Tcp5555);
+
+                    foreach (string endpoint in endpoints)
+                    {
+                        Discovery.Disconnect(endpoint);
+                        // 自动扫描是默认开着的：不设静默期的话，下一轮刷新就会把它接回来。
+                        Discovery.SuppressWireless(endpoint, WirelessDisconnectCooldown);
+                    }
                 }
                 return true;
             default:
